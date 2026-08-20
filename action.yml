@@ -1,0 +1,140 @@
+name: 'NuGet Cooldown'
+description: 'Fail the build if any NuGet package version is younger than N days (dependency cooldown / minimum release age).'
+author: 'George Andguladze'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  path:
+    description: 'Directory, solution, project, project.assets.json, or packages.lock.json to check.'
+    required: false
+    default: '.'
+  days:
+    description: 'Cooldown window in days (defaults to 7 when neither days nor hours is set).'
+    required: false
+    default: ''
+  hours:
+    description: 'Extra hours added to the window; use alone for sub-day windows.'
+    required: false
+    default: ''
+  scope:
+    description: 'Which packages to check: all (direct + transitive) or direct.'
+    required: false
+    default: ''
+  allow:
+    description: "Allow-list patterns, ';'-separated (e.g. MyCompany.*;Serilog@4.3.0)."
+    required: false
+    default: ''
+  sources:
+    description: "NuGet V3 service index URLs, ';'-separated (defaults to nuget.org)."
+    required: false
+    default: ''
+  warn-only:
+    description: 'Report findings but always succeed (true/false).'
+    required: false
+    default: 'false'
+  on-unknown:
+    description: 'warn | error | ignore for undeterminable publish dates.'
+    required: false
+    default: ''
+  on-unlisted:
+    description: 'warn | error | ignore for unlisted (withdrawn) versions.'
+    required: false
+    default: ''
+  on-feed-error:
+    description: 'warn | error | ignore for feed query failures.'
+    required: false
+    default: ''
+  on-not-restored:
+    description: 'warn | error | ignore for projects with no dependency graph.'
+    required: false
+    default: ''
+  config:
+    description: 'Path to a nuget-cooldown.json config file.'
+    required: false
+    default: ''
+  format:
+    description: 'Output format: text or json.'
+    required: false
+    default: ''
+  timeout:
+    description: 'Per-request feed timeout, in seconds.'
+    required: false
+    default: ''
+  max-parallel:
+    description: 'Maximum concurrent feed lookups (1-32).'
+    required: false
+    default: ''
+  tool-version:
+    description: 'Version of the NuGetCooldown tool to install (defaults to the latest stable).'
+    required: false
+    default: ''
+
+outputs:
+  exit-code:
+    description: 'Exit code from the check: 0 = passed (or warn-only), 1 = violations or policy errors.'
+    value: ${{ steps.check.outputs.exit-code }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: NuGetCooldown check
+      id: check
+      shell: bash
+      env:
+        NCD_TOOL_VERSION: ${{ inputs.tool-version }}
+        NCD_PATH: ${{ inputs.path }}
+        NCD_DAYS: ${{ inputs.days }}
+        NCD_HOURS: ${{ inputs.hours }}
+        NCD_SCOPE: ${{ inputs.scope }}
+        NCD_ALLOW: ${{ inputs.allow }}
+        NCD_SOURCES: ${{ inputs.sources }}
+        NCD_WARN_ONLY: ${{ inputs.warn-only }}
+        NCD_ON_UNKNOWN: ${{ inputs.on-unknown }}
+        NCD_ON_UNLISTED: ${{ inputs.on-unlisted }}
+        NCD_ON_FEED_ERROR: ${{ inputs.on-feed-error }}
+        NCD_ON_NOT_RESTORED: ${{ inputs.on-not-restored }}
+        NCD_CONFIG: ${{ inputs.config }}
+        NCD_FORMAT: ${{ inputs.format }}
+        NCD_TIMEOUT: ${{ inputs.timeout }}
+        NCD_MAX_PARALLEL: ${{ inputs.max-parallel }}
+      run: |
+        set -euo pipefail
+
+        # Install the tool, or update it if a previous step already installed it. This is
+        # idempotent whether or not the tool is present.
+        install_args=(--global NuGetCooldown)
+        if [ -n "$NCD_TOOL_VERSION" ]; then
+          install_args+=(--version "$NCD_TOOL_VERSION")
+        fi
+        dotnet tool install "${install_args[@]}" || dotnet tool update "${install_args[@]}"
+        export PATH="$HOME/.dotnet/tools:$PATH"
+
+        # Build the argument list from the inputs. Values come from env vars, never interpolated
+        # into the script, so an input value can't inject shell.
+        args=(check "$NCD_PATH")
+        add() { if [ -n "$2" ]; then args+=("$1" "$2"); fi; }
+        add --days "$NCD_DAYS"
+        add --hours "$NCD_HOURS"
+        add --scope "$NCD_SCOPE"
+        add --allow "$NCD_ALLOW"
+        add --source "$NCD_SOURCES"
+        add --on-unknown "$NCD_ON_UNKNOWN"
+        add --on-unlisted "$NCD_ON_UNLISTED"
+        add --on-feed-error "$NCD_ON_FEED_ERROR"
+        add --on-not-restored "$NCD_ON_NOT_RESTORED"
+        add --config "$NCD_CONFIG"
+        add --format "$NCD_FORMAT"
+        add --timeout "$NCD_TIMEOUT"
+        add --max-parallel "$NCD_MAX_PARALLEL"
+        if [ "$NCD_WARN_ONLY" = "true" ]; then args+=(--warn-only); fi
+
+        echo "+ nuget-cooldown ${args[*]}"
+        set +e
+        nuget-cooldown "${args[@]}"
+        code=$?
+        set -e
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        exit $code

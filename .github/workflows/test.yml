@@ -1,0 +1,68 @@
+name: Test action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Create a sample project
+        shell: bash
+        run: |
+          mkdir -p sample
+          cat > sample/Sample.csproj <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup><PackageReference Include="Newtonsoft.Json" Version="13.0.3" /></ItemGroup>
+          </Project>
+          EOF
+          echo 'class C { }' > sample/C.cs
+          dotnet restore sample
+
+      - name: Passing check (old package, default window)
+        uses: ./
+        with:
+          path: sample
+
+      - name: Strict check should fail
+        id: strict
+        continue-on-error: true
+        uses: ./
+        with:
+          path: sample
+          days: '3000'
+
+      - name: Assert the strict check failed with exit code 1
+        shell: bash
+        run: |
+          echo "outcome=${{ steps.strict.outcome }} exit-code=${{ steps.strict.outputs.exit-code }}"
+          if [ "${{ steps.strict.outcome }}" != "failure" ] || [ "${{ steps.strict.outputs.exit-code }}" != "1" ]; then
+            echo "Expected the strict check to fail with exit code 1"; exit 1
+          fi
+
+      - name: Warn-only should pass despite a violation
+        uses: ./
+        with:
+          path: sample
+          days: '3000'
+          warn-only: 'true'
+
+      - name: Allow-list should rescue the violation
+        uses: ./
+        with:
+          path: sample
+          days: '3000'
+          allow: 'Newtonsoft.Json@13.0.3'
